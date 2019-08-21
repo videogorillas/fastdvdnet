@@ -74,5 +74,5 @@ def denoise_seq_fastdvdnet(seq, noise_std, temp_psz, model_temporal):
 	del inframes_t
 	torch.cuda.empty_cache()
 
-	# convert to appropiate type and return
+	# convert to appropriate type and return
 	return denframes
