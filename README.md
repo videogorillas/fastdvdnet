@@ -1,3 +1,7 @@
+python run_fastdvdnet.py --read_path /svlk/anton/malfunk/16mm_BRIAN_3/ --save_path /tmp/
+
+
+
 # [FastDVDnet](https://arxiv.org/abs/1907.01361)
 
 A state-of-the-art, simple and fast network for Deep Video Denoising which uses no motion compensation
