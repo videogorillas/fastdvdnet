@@ -121,16 +121,16 @@ def open_sequence(seq_dir, gray_mode, expand_if_needed=False, max_num_fr=100):
 	print("\tOpen sequence in folder: ", seq_dir)
 	for fpath in files[0:max_num_fr]:
 
-		img, expanded_h, expanded_w = open_image(fpath,\
-												   gray_mode=gray_mode,\
-												   expand_if_needed=expand_if_needed,\
-												   expand_axis0=False)
+		img, expanded_h, expanded_w = preprocess_img(fpath, \
+													 gray_mode=gray_mode, \
+													 expand_if_needed=expand_if_needed, \
+													 expand_axis0=False)
 		seq_list.append(img)
 		seq = np.stack(seq_list, axis=0)
 	return seq, expanded_h, expanded_w
 
-def open_image(fpath, gray_mode, expand_if_needed=False, expand_axis0=True, normalize_data=True):
-	r""" Opens an image and expands it if necesary
+def preprocess_img(img, expand_if_needed=False, expand_axis0=True, normalize_data=True):
+	"""Opens an image and expands it if necessary
 	Args:
 		fpath: string, path of image file
 		gray_mode: boolean, True indicating if image is to be open
@@ -145,14 +145,6 @@ def open_image(fpath, gray_mode, expand_if_needed=False, expand_axis0=True, norm
 		expanded_h: True if original dim H was odd and image got expanded in this dimension.
 		expanded_w: True if original dim W was odd and image got expanded in this dimension.
 	"""
-	if not gray_mode:
-		# Open image as a CxHxW torch.Tensor
-		img = cv2.imread(fpath)
-		# from HxWxC to CxHxW, RGB image
-		img = (cv2.cvtColor(img, cv2.COLOR_BGR2RGB)).transpose(2, 0, 1)
-	else:
-		# from HxWxC to  CxHxW grayscale image (C=1)
-		img = cv2.imread(fpath, cv2.IMREAD_GRAYSCALE)
 
 	if expand_axis0:
 		img = np.expand_dims(img, 0)

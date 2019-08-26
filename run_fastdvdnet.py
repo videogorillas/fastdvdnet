@@ -7,15 +7,17 @@ Denoise all the sequences existent in a given folder using FastDVDnet.
 import argparse
 import os
 import time
+from multiprocessing import Queue
 
 import cv2
+import image2pipe as image2pipe
 import numpy as np
 import torch
 import torch.nn as nn
 
 from fastdvdnet import denoise_seq_fastdvdnet
 from models import FastDVDnet
-from utils import variable_to_cv2_image, remove_dataparallel_wrapper, get_imagenames, open_image, batch_psnr
+from utils import variable_to_cv2_image, remove_dataparallel_wrapper, get_imagenames, preprocess_img, batch_psnr
 
 NUM_IN_FR_EXT = 5  # temporal size of patch
 MC_ALGO = 'DeepFlow'  # motion estimation algorithm
@@ -47,35 +49,59 @@ def save_out_seq(seqnoisy, seqclean, save_dir, sigmaval, suffix, save_noisy):
         cv2.imwrite(out_name, outimg)
 
 
+def yield_from_dir(in_dir):
+    files = get_imagenames(in_dir)
+    for fn, fpath in enumerate(files):
+        if not args.gray:
+            # Open image as a CxHxW torch.Tensor
+            img = cv2.imread(fpath)
+            # from HxWxC to CxHxW, RGB image
+            img = (cv2.cvtColor(img, cv2.COLOR_BGR2RGB)).transpose(2, 0, 1)
+        else:
+            # from HxWxC to  CxHxW grayscale image (C=1)
+            img = cv2.imread(fpath, cv2.IMREAD_GRAYSCALE)
+
+        img, expanded_h, expanded_w = preprocess_img(img, expand_if_needed=False, expand_axis0=False)
+        yield fpath, img
+
+
 if __name__ == "__main__":
     # Parse arguments
     parser = argparse.ArgumentParser(description="Denoise a sequence with FastDVDnet")
-    parser.add_argument("--model_file", type=str,
-                        default="./model.pth",
+    parser.add_argument("--model_file", type=str, default="./model.pth",
                         help='path to model of the pretrained denoiser')
-    parser.add_argument("--read_path", type=str, default="./data/rgb/Kodak24",
-                        help='path to sequence to denoise')
+    parser.add_argument("--read_path", required=True, type=str, help='input video file')
+    parser.add_argument("--save_path", required=True, type=str, help='output video file')
+
     parser.add_argument("--suffix", type=str, default="", help='suffix to add to output name')
     parser.add_argument("--noise_sigma", type=float, default=25, help='noise level used on test set')
     parser.add_argument("--no_gpu", action='store_true', help="run model on CPU")
-    parser.add_argument("--save_path", type=str, default='./results',
-                        help='where to save outputs as png')
     parser.add_argument("--gray", action='store_true',
                         help='perform denoising of grayscale images instead of RGB')
 
-    argspar = parser.parse_args()
+    args = parser.parse_args()
+
     # Normalize noises ot [0, 1]
-    argspar.noise_sigma /= 255.
+    args.noise_sigma /= 255.
+
+    print(args)
+
+    # if args.read_path is None or args.save_path is None:
+    #     parser.print_usage()
+    #     sys.exit(1)
 
     # use CUDA?
-    argspar.cuda = not argspar.no_gpu and torch.cuda.is_available()
+    args.cuda = not args.no_gpu and torch.cuda.is_available()
 
-    print("> Parameters:")
-    for p, v in zip(argspar.__dict__.keys(), argspar.__dict__.values()):
-        print('\t{}: {}'.format(p, v))
-    print('\n')
+    frames_q = None
+    if args.read_path.find("://") > -1:
+        print("Decoding input video %s" % args.read_path)
 
-    args = argspar
+        frames_q = Queue(maxsize=NUM_IN_FR_EXT * 5)
+        if args.read_path.find(":/") > -1:
+            probe = image2pipe.ffprobe(args.read_path)
+            decoder = image2pipe.images_from_url(frames_q, args.read_path, scale=None)
+            decoder.start()
 
     # If save_path does not exist, create it
     if not os.path.exists(args.save_path):
@@ -88,8 +114,9 @@ if __name__ == "__main__":
         device = torch.device('cpu')
 
     # Create models
-    print('Loading models ...')
+    print('Loading model ...')
     model_temp = FastDVDnet(num_input_frames=NUM_IN_FR_EXT)
+    print('OK')
 
     # Load saved weights
     state_temp_dict = torch.load(args.model_file)
@@ -106,22 +133,31 @@ if __name__ == "__main__":
     start_time = time.time()
 
     with torch.no_grad():
-        # Get ordered list of filenames
-        files = get_imagenames(args.read_path)
+        if frames_q:
+            imgs = image2pipe.utils.yield_from_queue(frames_q)
+        else:
+            # Get ordered list of filenames
+            print("\tOpen sequence in folder: ", args.read_path)
+            imgs = yield_from_dir(args.read_path)
 
         seq_list = []
         seq_outnames = []
-        print("\tOpen sequence in folder: ", args.read_path)
-        for fpath in files:
-            img, expanded_h, expanded_w = open_image(fpath,
-                                                     gray_mode=args.gray,
-                                                     expand_if_needed=False,
-                                                     expand_axis0=False)
+
+        for fn_or_fpath, img in imgs:
+            if type(fn_or_fpath) is int:
+                fpath = "%06d.png" % fn_or_fpath
+                # from HxWxC to CxHxW, RGB image
+                img = img.transpose(2, 0, 1)
+                img, expanded_h, expanded_w = preprocess_img(img, expand_if_needed=False, expand_axis0=False)
+            else:
+                fpath = fn_or_fpath
+
+            print("Load img:", fpath, img.shape)
+
             seq_list.append(img)
             seq_outnames.append(os.path.basename(fpath))
             seq = np.stack(seq_list, axis=0)
             # return seq, expanded_h, expanded_w
-            print("Load img:", fpath)
 
             if len(seq_list) == NUM_IN_FR_EXT:
                 print("Infer batch ...")
